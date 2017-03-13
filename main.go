@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"time"
 
 	"github.com/ericchiang/k8s"
@@ -38,7 +39,8 @@ func main() {
 	//uses the current context in kubeconfig unless overriden using '-context'
 	client, err := loadClient(*kubeconfigPath, *kubeContext)
 	if err != nil {
-		panic(err.Error)
+		fmt.Printf("Failed to read kubeconfig (%s). Exiting.\n", *kubeconfigPath)
+		os.Exit(1)
 	}
 
 	// Retrive a list of all jobs in the current context and namespace
