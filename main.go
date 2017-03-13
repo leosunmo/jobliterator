@@ -30,9 +30,10 @@ func loadClient(kubeconfigPath, kubeContext string) (*k8s.Client, error) {
 
 func main() {
 	kubeconfigPath := flag.String("kubeconfig", "./config", "absolute path to the kubeconfig file")
-	kubeContext := flag.String("context", "", "override current-context")
+	kubeContext := flag.String("context", "", "override current-context. Default 'current-context' in kubeconfig")
 	kubeNamespace := flag.String("namespace", "", "specify namespace. All if unset.")
 	deleteJobs := flag.Bool("delete", false, "set to actually delete the jobs")
+	olderThanDays := flag.Int("days", 7, "set delete threshold in days. Default 7 days")
 	flag.Parse()
 	//uses the current context in kubeconfig unless overriden using '-context'
 	client, err := loadClient(*kubeconfigPath, *kubeContext)
@@ -50,7 +51,7 @@ func main() {
 	for _, j := range jobs.Items {
 		completionTime := time.Unix(j.Status.GetCompletionTime().GetSeconds(), 0)
 		daysOld := int(now.Sub(completionTime).Hours() / 24)
-		if daysOld >= 7 {
+		if daysOld >= *olderThanDays {
 			eligibleJobs = append(eligibleJobs, *j.Metadata.Name)
 		}
 	}
