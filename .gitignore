@@ -22,3 +22,6 @@ _testmain.go
 *.exe
 *.test
 *.prof
+
+# I'll end up accidentally committing the binary...
+jobliterator
