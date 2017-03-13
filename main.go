@@ -32,6 +32,7 @@ func main() {
 	kubeconfigPath := flag.String("kubeconfig", "./config", "absolute path to the kubeconfig file")
 	kubeContext := flag.String("context", "", "override current-context")
 	kubeNamespace := flag.String("namespace", "", "specify namespace. All if unset.")
+	deleteJobs := flag.Bool("delete", false, "set to actually delete the jobs")
 	flag.Parse()
 	//uses the current context in kubeconfig unless overriden using '-context'
 	client, err := loadClient(*kubeconfigPath, *kubeContext)
@@ -55,4 +56,11 @@ func main() {
 	}
 	fmt.Printf("Eligible jobs for deletion:\n %v\n", eligibleJobs)
 	fmt.Printf("Total: %v\n", len(eligibleJobs))
+
+	if *deleteJobs {
+		for _, dj := range eligibleJobs {
+			fmt.Printf("Deleting job: %s\n", dj)
+			client.BatchV1().DeleteJob(context.Background(), dj, *kubeNamespace)
+		}
+	}
 }
