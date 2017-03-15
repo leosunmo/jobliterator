@@ -12,6 +12,12 @@ import (
 	"github.com/ghodss/yaml"
 )
 
+type kubeJob struct {
+	name      string
+	namespace string
+	age       int
+}
+
 func loadClient(kubeconfigPath, kubeContext string) (*k8s.Client, error) {
 	data, err := ioutil.ReadFile(kubeconfigPath)
 	if err != nil {
@@ -48,25 +54,30 @@ func main() {
 	if err != nil {
 		panic(err.Error())
 	}
+
 	now := time.Now()
-	eligibleJobs := []string{}
+	var eligibleJobs []kubeJob
 	for _, j := range jobs.Items {
 		completionTime := time.Unix(j.Status.GetCompletionTime().GetSeconds(), 0)
 		daysOld := int(now.Sub(completionTime).Hours() / 24)
 		if daysOld >= *olderThanDays {
-			eligibleJobs = append(eligibleJobs, *j.Metadata.Name)
+			eligibleJobs = append(eligibleJobs, kubeJob{name: *j.Metadata.Name, namespace: *j.Metadata.Namespace, age: daysOld})
 		}
 	}
 
 	if *deleteJobs {
 		for _, dj := range eligibleJobs {
-			fmt.Printf("Deleting job: %s\n", dj)
-			client.BatchV1().DeleteJob(context.Background(), dj, *kubeNamespace)
+			fmt.Printf("Deleting job: %s\tAge:%vd\n", dj.name, dj.age)
+			err := client.BatchV1().DeleteJob(context.Background(), dj.name, dj.namespace)
+			if err != nil {
+				fmt.Println("Unable to delete job %s.\n Error: %v\n", dj.name, err.Error())
+				continue
+			}
 		}
 	} else {
 		fmt.Println("Jobs eligible for deletion with -f flag:")
 		for _, dj := range eligibleJobs {
-			fmt.Println(dj)
+			fmt.Printf("Name: %s\t\tAge:%vd\n", dj.name, dj.age)
 		}
 	}
 	fmt.Printf("Total: %v\n", len(eligibleJobs))
