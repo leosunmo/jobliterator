@@ -58,10 +58,12 @@ func main() {
 	now := time.Now()
 	var eligibleJobs []kubeJob
 	for _, j := range jobs.Items {
-		completionTime := time.Unix(j.Status.GetCompletionTime().GetSeconds(), 0)
-		daysOld := int(now.Sub(completionTime).Hours() / 24)
-		if daysOld >= *olderThanDays {
-			eligibleJobs = append(eligibleJobs, kubeJob{name: *j.Metadata.Name, namespace: *j.Metadata.Namespace, age: daysOld})
+		if *j.Status.Active != 1 {
+			completionTime := time.Unix(j.Status.GetCompletionTime().GetSeconds(), 0)
+			daysOld := int(now.Sub(completionTime).Hours() / 24)
+			if daysOld >= *olderThanDays {
+				eligibleJobs = append(eligibleJobs, kubeJob{name: *j.Metadata.Name, namespace: *j.Metadata.Namespace, age: daysOld})
+			}
 		}
 	}
 
