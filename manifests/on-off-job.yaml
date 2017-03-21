@@ -1,0 +1,18 @@
+# Example job that will create a one-off job in kubernetes
+apiVersion: batch/v1
+kind: Job
+metadata:
+ name: job-cleaner-one-off
+spec:
+  template:
+    metadata:
+      name: job-cleaner-one-off
+    spec:
+      containers:
+      - name: job-cleaner
+        image: jobliterator:0.1
+        command: ["/jobliterator"]
+        args: ["-in-cluster","-days","10", "-f"]
+        imagePullPolicy: Always
+      restartPolicy: Never
+
