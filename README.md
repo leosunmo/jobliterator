@@ -3,12 +3,19 @@ Jobliterator
 
 Super simple binary that deletes jobs older than `-days` days (default 7 days).
 
-If `-delete` is not specified it will only list jobs eligible for deletion.
+If `-f` is not specified it will only list jobs eligible for deletion.
 
-Usage:
+## Usage:
 
-`./jobliterator -kubeconfig ~/.kube/config -context prod-cluster -delete` 
+Outside of Kubernetes cluster:
+`./jobliterator -kubeconfig ~/.kube/config -context prod-cluster -f` 
 
-TODO:
+Inside Kubernetes cluster:
+`./jobliterator -in-cluster -context prod-cluster -f`
 
-Gotta get some error handling for the delete command.
+## Examples
+
+CronJob and one-off Jobs are in `manifests`.
+
+Simple Dockerfile in `docker`.
+

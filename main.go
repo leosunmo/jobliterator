@@ -18,16 +18,23 @@ type kubeJob struct {
 	age       int
 }
 
-func loadClient(kubeconfigPath, kubeContext string) (*k8s.Client, error) {
+func loadClient(kubeconfigPath, kubeContext string, inCluster bool) (*k8s.Client, error) {
+	if inCluster {
+		client, err := k8s.NewInClusterClient()
+		if err != nil {
+			return nil, fmt.Errorf("Failed to create in-cluster client: %v", err)
+		}
+		return client, nil
+	}
 	data, err := ioutil.ReadFile(kubeconfigPath)
 	if err != nil {
-		return nil, fmt.Errorf("read kubeconfig: %v", err)
+		return nil, fmt.Errorf("Failed to read kubeconfig: %v", err)
 	}
 
 	// Unmarshal YAML into a Kubernetes config object.
 	var config k8s.Config
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("unmarshal kubeconfig: %v", err)
+		return nil, fmt.Errorf("Failed to unmarshal kubeconfig: %v", err)
 	}
 	if kubeContext != "" {
 		config.CurrentContext = kubeContext
@@ -37,15 +44,16 @@ func loadClient(kubeconfigPath, kubeContext string) (*k8s.Client, error) {
 
 func main() {
 	kubeconfigPath := flag.String("kubeconfig", "./config", "path to the kubeconfig file")
+	inCluster := flag.Bool("in-cluster", false, "Use in-cluster credentials")
 	kubeContext := flag.String("context", "", "override current-context (default 'current-context' in kubeconfig)")
 	kubeNamespace := flag.String("namespace", "", "specific namespace (default all namespaces)")
 	deleteJobs := flag.Bool("f", false, "force delete the jobs (default simulate without deleting)")
 	olderThanDays := flag.Int("days", 7, "set delete threshold in days")
 	flag.Parse()
 	//uses the current context in kubeconfig unless overriden using '-context'
-	client, err := loadClient(*kubeconfigPath, *kubeContext)
+	client, err := loadClient(*kubeconfigPath, *kubeContext, *inCluster)
 	if err != nil {
-		fmt.Printf("Failed to read kubeconfig (%s). Exiting.\n", *kubeconfigPath)
+		fmt.Println(err.Error())
 		os.Exit(1)
 	}
 
