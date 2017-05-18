@@ -12,15 +12,27 @@ import (
 	"github.com/ghodss/yaml"
 )
 
-type kubeJob struct {
-	name      string
-	namespace string
-	age       int
-}
 type kubePod struct {
 	name      string
 	namespace string
 	phase     string
+}
+
+type kubeJobSet map[string][]kubePod
+
+type kubeJob struct {
+	name      string
+	namespace string
+	age       int
+	pods      []kubePod
+}
+
+func (js kubeJobSet) Add(job string, pod kubePod) {
+	_, ok := js[job]
+	if !ok {
+		js[job] = make([]kubePod, 0, 20)
+	}
+	js[job] = append(js[job], pod)
 }
 
 func loadClient(kubeconfigPath, kubeContext string, inCluster bool) (*k8s.Client, error) {
@@ -47,12 +59,51 @@ func loadClient(kubeconfigPath, kubeContext string, inCluster bool) (*k8s.Client
 	return k8s.NewClient(&config)
 }
 
+func getOrphanedPods(client *k8s.Client, kubeNamespace string) ([]kubeJob, error) {
+	var opJobs []kubeJob
+	opJobSet := make(kubeJobSet)
+	pods, podErr := client.CoreV1().ListPods(context.Background(), kubeNamespace)
+	if podErr != nil {
+		return nil, fmt.Errorf("ERROR: %s.", podErr.Error())
+	} else {
+		if len(pods.Items) > 0 {
+			for _, p := range pods.Items {
+				pl := p.Metadata.GetLabels()
+				if val, ok := pl["job-name"]; ok {
+					fmt.Printf("[DEBUG]: Pod %s\n\t\tJob-name value: %s\t", p.Metadata.GetName, val)
+					jobCheck, err := client.BatchV1().GetJob(context.Background(), val, kubeNamespace)
+					if err != nil {
+						if apiErr, ok := err.(*k8s.APIError); ok {
+							if apiErr.Code == 404 {
+								jobCheck = nil
+							}
+						} else {
+							return nil, fmt.Errorf("Error getting job: %s", err.Error())
+						}
+					}
+					if jobCheck == nil {
+						kp := kubePod{name: p.Metadata.GetName(), namespace: p.Metadata.GetNamespace(), phase: p.Status.GetPhase()}
+						opJobSet.Add(val, kp)
+					}
+				}
+			}
+		} else {
+			return nil, fmt.Errorf("Unable to find any pods.")
+		}
+	}
+	for k, v := range opJobSet {
+		opJobs = append(opJobs, kubeJob{name: k, namespace: kubeNamespace, age: 0, pods: v})
+	}
+	return opJobs, nil
+}
+
 func main() {
 	kubeconfigPath := flag.String("kubeconfig", "./config", "path to the kubeconfig file")
 	inCluster := flag.Bool("in-cluster", false, "Use in-cluster credentials")
 	kubeContext := flag.String("context", "", "override current-context (default 'current-context' in kubeconfig)")
 	kubeNamespace := flag.String("namespace", "", "specific namespace (default all namespaces)")
-	deleteJobs := flag.Bool("f", false, "force delete the jobs (default simulate without deleting)")
+	deleteJobs := flag.Bool("f", false, "Delete the jobs/pods (default simulate without deleting)")
+	orphanedPods := flag.Bool("o", false, "Search for orphaned job pods. Deletes them if \"-f\" is set.")
 	olderThanDays := flag.Int("days", 7, "set delete threshold in days")
 	flag.Parse()
 	//uses the current context in kubeconfig unless overriden using '-context'
@@ -83,7 +134,7 @@ func main() {
 
 	if *deleteJobs {
 		for _, dj := range eligibleJobs {
-			fmt.Printf("Deleting job: %s\tAge:%vd\n", dj.name, dj.age)
+			fmt.Printf("Deleting job: %s\tNamespace:%s\tAge:%vd\n", dj.name, dj.namespace, dj.age)
 			// First use the job label to find the corresponding pods to delete
 			podLS := new(k8s.LabelSelector)
 			podLS.Eq("job-name", dj.name)
@@ -94,27 +145,30 @@ func main() {
 				continue
 			}
 			var eligiblePods []kubePod
-			for _, p := range pods.Items {
-
-				// Build a slice of eligible jobs to avoid calling the API more than needed
-				if *p.Status.Phase == "Succeeded" || *p.Status.Phase == "Failed" {
-					eligiblePods = append(eligiblePods, kubePod{name: p.Metadata.GetName(), namespace: p.Metadata.GetNamespace(), phase: p.Status.GetPhase()})
-				} else {
-					fmt.Printf("\tPod associated with %s is not in \"Succeeded\" or \"Failed\" phase but job is complete.", dj.name)
-					fmt.Printf("\tPod %s is in phase %s, skipping.", p.Metadata.GetName(), p.Status.GetPhase())
-				}
-			}
-			if len(eligiblePods) > 0 {
-				for _, dp := range eligiblePods {
-					fmt.Printf("\tDeleting pod: %s\tPhase: %s\n", dp.name, dp.phase)
-					podErr = client.CoreV1().DeletePod(context.Background(), dp.name, dp.namespace)
-					if podErr != nil {
-						fmt.Printf("\tUnable to delete pod %s. Error: %s\n", dp.name, podErr.Error())
-						continue
+			if len(pods.Items) > 0 {
+				for _, p := range pods.Items {
+					// Build a slice of eligible jobs to avoid calling the API more than needed
+					if *p.Status.Phase == "Succeeded" || *p.Status.Phase == "Failed" {
+						eligiblePods = append(eligiblePods, kubePod{name: p.Metadata.GetName(), namespace: p.Metadata.GetNamespace(), phase: p.Status.GetPhase()})
+					} else {
+						fmt.Printf("\tPod associated with %s is not in \"Succeeded\" or \"Failed\" phase but job is complete.", dj.name)
+						fmt.Printf("\tPod %s is in phase %s, skipping.\n", p.Metadata.GetName(), p.Status.GetPhase())
 					}
 				}
+				if len(eligiblePods) > 0 {
+					for _, dp := range eligiblePods {
+						fmt.Printf("\tDeleting pod: %s\tPhase: %s\n", dp.name, dp.phase)
+						podErr = client.CoreV1().DeletePod(context.Background(), dp.name, dp.namespace)
+						if podErr != nil {
+							fmt.Printf("\tUnable to delete pod %s. Error: %s\n", dp.name, podErr.Error())
+							continue
+						}
+					}
+				} else {
+					fmt.Printf("\tNo pods eligible for deletion associated with job %s.\n", dj.name)
+				}
 			} else {
-				fmt.Printf("\tNo pods eligible for deletion associated with job %s.", dj.name)
+				fmt.Printf("\tNo pods associated with job %s.\n", dj.name)
 			}
 
 			err2 := client.BatchV1().DeleteJob(context.Background(), dj.name, dj.namespace)
@@ -123,10 +177,45 @@ func main() {
 				continue
 			}
 		}
+		if *orphanedPods {
+			opCount := 0
+			fmt.Println("==============================")
+			fmt.Println("Searching for orphaned pods...")
+			fmt.Println("==============================")
+			opJobs, err := getOrphanedPods(client, *kubeNamespace)
+			if err != nil {
+				fmt.Printf("Error fetching orphaned pods: %s", err.Error())
+			} else {
+				for _, j := range opJobs {
+					fmt.Printf("Job: %s\tNamespace:%s\n", j.name, j.namespace)
+					if len(j.pods) < 1 {
+						fmt.Printf("Unable to find any pods associated with job %s.\n", j.name)
+						continue
+					}
+					for _, op := range j.pods {
+						if op.phase == "Succeeded" || op.phase == "Failed" {
+							opCount++
+							fmt.Printf("\tDeleting pod: %s\tNamespace: %s\tPhase: %s\n", op.name, op.namespace, op.phase)
+							podErr := client.CoreV1().DeletePod(context.Background(), op.name, op.namespace)
+							if podErr != nil {
+								fmt.Printf("\tUnable to delete pod %s. Error: %s\n", op.name, podErr.Error())
+								continue
+							}
+						} else {
+							fmt.Printf("\tPod %s is not in \"Succeeded\" or \"Failed\" phase but appears oprhaned.\n", op.name)
+							fmt.Printf("\tPod %s is in phase %s, skipping.\n", op.name, op.phase)
+						}
+
+					}
+
+				}
+			}
+			fmt.Printf("Total orphaned Pods: %v beloning to %v jobs.\n", opCount, len(opJobs))
+		}
 	} else {
 		fmt.Println("Jobs eligible for deletion with -f flag:")
 		for _, dj := range eligibleJobs {
-			fmt.Printf("Name: %s\t\tAge:%vd\n", dj.name, dj.age)
+			fmt.Printf("Name: %s\tNamespace: %s\tAge:%vd\n", dj.name, dj.namespace, dj.age)
 			podLS := new(k8s.LabelSelector)
 			podLS.Eq("job-name", dj.name)
 			pods, podErr := client.CoreV1().ListPods(context.Background(), *kubeNamespace, podLS.Selector())
@@ -136,51 +225,50 @@ func main() {
 				continue
 			}
 			var eligiblePods []kubePod
-			for _, p := range pods.Items {
-				if *p.Status.Phase == "Succeeded" || *p.Status.Phase == "Failed" {
-					eligiblePods = append(eligiblePods, kubePod{name: p.Metadata.GetName(), namespace: p.Metadata.GetNamespace(), phase: p.Status.GetPhase()})
-				} else {
-					fmt.Printf("\tPod associated with %s is not in \"Succeeded\" or \"Failed\" phase but job is complete.", dj.name)
-					fmt.Printf("\tPod %s is in phase %s, skipping.", p.Metadata.GetName(), p.Status.GetPhase())
+			if len(pods.Items) > 0 {
+				for _, p := range pods.Items {
+					if *p.Status.Phase == "Succeeded" || *p.Status.Phase == "Failed" {
+						eligiblePods = append(eligiblePods, kubePod{name: p.Metadata.GetName(), namespace: p.Metadata.GetNamespace(), phase: p.Status.GetPhase()})
+					} else {
+						fmt.Printf("\tPod associated with %s is not in \"Succeeded\" or \"Failed\" phase but job is complete.", dj.name)
+						fmt.Printf("\tPod %s is in phase %s, skipping.", p.Metadata.GetName(), p.Status.GetPhase())
+					}
 				}
-			}
-			if len(eligiblePods) > 0 {
-				for _, dp := range eligiblePods {
-					fmt.Printf("\tPod: %s\t\tPhase: %s\n", dp.name, dp.phase)
+				if len(eligiblePods) > 0 {
+					for _, dp := range eligiblePods {
+						fmt.Printf("\tPod: %s\tNamespace: %s\tPhase: %s\n", dp.name, dp.namespace, dp.phase)
+					}
+				} else {
+					fmt.Printf("\tNo pods eligible for deletion associated with job %s.\n", dj.name)
 				}
 			} else {
-				fmt.Printf("\tNo pods eligible for deletion associated with job %s.", dj.name)
+				fmt.Printf("\tNo pods associated with job %s.\n", dj.name)
 			}
 		}
-	}
-	fmt.Printf("Total Jobs: %v\n", len(eligibleJobs))
-	fmt.Println("Searching for orphaned pods...")
-	pods, podErr := client.CoreV1().ListPods(context.Background(), *kubeNamespace)
-	if podErr != nil {
-		fmt.Printf("ERROR: %s.", podErr.Error())
-	} else {
-		if len(pods.Items) > 0 {
-			for _, pod := range pods.Items {
-				pl := pod.Metadata.GetLabels()
-				if val, ok := pl["job-name"]; ok {
-					jobCheck, err := client.BatchV1().GetJob(context.Background(), val, *kubeNamespace)
-					if err != nil {
-						if apiErr, ok := err.(*k8s.APIError); ok {
-							if apiErr.Code == 404 {
-								jobCheck = nil
-							}
+		fmt.Printf("Total Jobs: %v\n", len(eligibleJobs))
+		if *orphanedPods {
+			opCount := 0
+			fmt.Println("==============================")
+			fmt.Println("Searching for orphaned pods...")
+			fmt.Println("==============================")
+			opJobs, err := getOrphanedPods(client, *kubeNamespace)
+			if err != nil {
+				fmt.Printf("Error fetching orphaned pods: %s", err.Error())
+			} else {
+				for _, j := range opJobs {
+					fmt.Printf("Job: %s\tNamespace: %s\n", j.name, j.namespace)
+					for _, op := range j.pods {
+						if op.phase == "Succeeded" || op.phase == "Failed" {
+							opCount++
+							fmt.Printf("\tPod: %s\tNamespace: %s\tPhase: %s\n", op.name, op.namespace, op.phase)
 						} else {
-							fmt.Printf("Error getting job: %s", err.Error())
+							fmt.Printf("\tPod %s is not in \"Succeeded\" or \"Failed\" phase but appears oprhaned.\n", op.name)
+							fmt.Printf("\tPod %s is in phase %s, skipping.\n", op.name, op.phase)
 						}
-					}
-					if jobCheck == nil {
-						fmt.Printf("Job: %s", val)
-						fmt.Printf("\tPod: %s\tNamespace: %s\tPhase: %s\n", pod.Metadata.GetName(),,pod.Metadata.GetNamespace(), pod.Status.GetPhase())
 					}
 				}
 			}
-		} else {
-			fmt.Println("Unable to find any pods.")
+			fmt.Printf("Total orphaned Pods: %v beloning to %v jobs.\n", opCount, len(opJobs))
 		}
 	}
 }
