@@ -70,8 +70,7 @@ func getOrphanedPods(client *k8s.Client, kubeNamespace string) ([]kubeJob, error
 			for _, p := range pods.Items {
 				pl := p.Metadata.GetLabels()
 				if val, ok := pl["job-name"]; ok {
-					fmt.Printf("[DEBUG]: Pod %s\n\t\tJob-name value: %s\t", p.Metadata.GetName, val)
-					jobCheck, err := client.BatchV1().GetJob(context.Background(), val, kubeNamespace)
+					jobCheck, err := client.BatchV1().GetJob(context.Background(), val, *p.Metadata.Namespace)
 					if err != nil {
 						if apiErr, ok := err.(*k8s.APIError); ok {
 							if apiErr.Code == 404 {
